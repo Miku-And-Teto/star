@@ -22,35 +22,6 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Detect build system
-      id: build-system
-      run: |
-        echo "=== Checking for build files ==="
-        if [ -f "gradlew" ]; then
-          echo "build-tool=gradle-wrapper" >> $GITHUB_OUTPUT
-          echo "✓ Found gradlew"
-        elif [ -f "app/build.gradle.kts" ]; then
-          echo "build-tool=gradle-wrapper-in-app" >> $GITHUB_OUTPUT
-          echo "✓ Found app/build.gradle.kts but no root gradlew"
-        elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-          echo "build-tool=gradle" >> $GITHUB_OUTPUT
-          echo "✓ Found build.gradle"
-        elif [ -f "CMakeLists.txt" ]; then
-          echo "build-tool=cmake" >> $GITHUB_OUTPUT
-          echo "✓ Found CMakeLists.txt"
-        else
-          echo "build-tool=unknown" >> $GITHUB_OUTPUT
-          echo "⚠ No standard build system detected"
-        fi
-        
-        echo "=== Project structure ==="
-        ls -la
-        
-        echo "=== App directory contents ==="
-        if [ -d "app" ]; then
-          ls -la app/
-        fi
-
     - name: Fix submodules path
       run: |
         if [ -f "app/.gitmodules" ]; then
@@ -59,7 +30,6 @@ jobs:
             name=$(echo "$entry" | sed 's/submodule\.\(.*\)\.path/\1/')
             path=$(git config --file=app/.gitmodules --get submodule."$name".path)
             url=$(git config --file=app/.gitmodules --get submodule."$name".url)
-            echo "Registering submodule: $name at $path from $url"
             git config --file=.gitmodules --add submodule."$name".path "app/$path"
             git config --file=.gitmodules --add submodule."$name".url "$url"
           done
@@ -77,18 +47,14 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    - name: Build with Gradle
-      if: steps.build-system.outputs.build-tool != 'unknown'
+    - name: Grant execute permission for gradlew
       run: |
         if [ -f "gradlew" ]; then
           chmod +x gradlew
-          ./gradlew clean assembleDebug
-        elif [ -f "app/build.gradle.kts" ] || [ -f "app/build.gradle" ]; then
-          # Try to use gradle directly if no gradlew
-          gradle wrapper
-          chmod +x gradlew
-          ./gradlew clean assembleDebug
         fi
+
+    - name: Build with Gradle (Debug APK)
+      run: ./gradlew clean assembleDebug
 
     - name: Get Git metadata
       id: git-info
@@ -99,35 +65,25 @@ jobs:
 
     - name: Extract version from build.gradle.kts
       id: version-info
-      if: success()
       run: |
-        if [ -f "app/build.gradle.kts" ]; then
-          VERSION=$(cat app/build.gradle.kts | grep versionName | cut -d "=" -f 2 | sed 's/"//g' | xargs)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-        else
-          echo "version=unknown" >> $GITHUB_OUTPUT
-        fi
+        VERSION=$(cat app/build.gradle.kts | grep versionName | cut -d "=" -f 2 | sed 's/"//g' | xargs)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
 
     - name: List build output files
       if: always()
       run: |
         echo "=== Build Outputs ==="
-        find . -name "*.apk" -type f 2>/dev/null || echo "No APK files found"
-        
-        echo "=== Gradle outputs ==="
-        ls -lah app/build/outputs/ 2>/dev/null || echo "No app/build/outputs directory"
-        
-        echo "=== Assets ==="
-        ls -lah app/src/main/assets/ 2>/dev/null || echo "No assets directory found"
+        ls -lah app/build/outputs/apk/debug/ || echo "No debug APK found"
 
     - name: Upload Debug APK
-      if: success() && hashFiles('app/build/outputs/apk/debug/*.apk') != ''
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: star-debug-apk-${{ steps.git-info.outputs.short-sha }}
-        path: app/build/outputs/apk/debug/*.apk
+        path: app/build/outputs/apk/debug/app-debug.apk
         retention-days: 30
+        if-no-files-found: error
 
     - name: Generate build summary
       if: always()
@@ -140,7 +96,6 @@ jobs:
         Commit: ${{ steps.git-info.outputs.short-sha }}
         Version: ${{ steps.version-info.outputs.version }}
         Build Date: ${{ steps.git-info.outputs.timestamp }}
-        Build System: ${{ steps.build-system.outputs.build-tool }}
         Build Status: ${{ job.status }}
         EOF
         cat build-summary.txt
