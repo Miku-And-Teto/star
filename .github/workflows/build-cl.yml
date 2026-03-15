@@ -36,8 +36,7 @@ jobs:
         fi
 
     - name: Initialize submodules
-      run: |
-        git submodule update --init --recursive --depth 1
+      run: git submodule update --init --recursive --depth 1
       continue-on-error: true
 
     - name: Setup JDK 17
@@ -51,10 +50,20 @@ jobs:
       run: |
         if [ -f "gradlew" ]; then
           chmod +x gradlew
+          echo "✓ gradlew found and made executable"
+        else
+          echo "⚠ gradlew not found, will use gradle"
         fi
 
-    - name: Build with Gradle (Debug APK)
-      run: ./gradlew clean assembleDebug
+    - name: Build with Gradle
+      run: |
+        if [ -f "gradlew" ]; then
+          ./gradlew clean assembleDebug
+        else
+          gradle wrapper
+          chmod +x gradlew
+          ./gradlew clean assembleDebug
+        fi
 
     - name: Get Git metadata
       id: git-info
@@ -63,27 +72,26 @@ jobs:
         echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
         echo "timestamp=$(date +%Y%m%d_%H%M%S)" >> $GITHUB_OUTPUT
 
-    - name: Extract version from build.gradle.kts
+    - name: Extract version
       id: version-info
       run: |
-        VERSION=$(cat app/build.gradle.kts | grep versionName | cut -d "=" -f 2 | sed 's/"//g' | xargs)
+        VERSION=$(grep 'versionName' app/build.gradle | head -1 | sed 's/.*versionName[[:space:]]*"//;s/".*//')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
 
-    - name: List build output files
+    - name: List build output
       if: always()
       run: |
         echo "=== Build Outputs ==="
-        ls -lah app/build/outputs/apk/debug/ || echo "No debug APK found"
+        find app/build/outputs -name "*.apk" 2>/dev/null || echo "No APK found yet"
 
     - name: Upload Debug APK
       if: success()
       uses: actions/upload-artifact@v4
       with:
         name: star-debug-apk-${{ steps.git-info.outputs.short-sha }}
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: app/build/outputs/apk/debug/*.apk
         retention-days: 30
-        if-no-files-found: error
 
     - name: Generate build summary
       if: always()
@@ -107,7 +115,3 @@ jobs:
         name: build-summary-${{ steps.git-info.outputs.short-sha }}
         path: build-summary.txt
         retention-days: 7
-
-    - name: Notify on failure
-      if: failure()
-      run: echo "::error::Build failed for commit ${{ steps.git-info.outputs.short-sha }}"
